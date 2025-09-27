@@ -217,11 +217,11 @@ function App() {
           // Bounce on edges
           if (head.x <= 0 || head.x + size >= canvas.width) {
             head.dx *= -1;
-            // head.x = Math.max(0, Math.min(head.x, canvas.width - size));
+            head.x = Math.max(0, Math.min(head.x, canvas.width - size));
           }
           if (head.y <= 0 || head.y + size >= canvas.height) {
             head.dy *= -1;
-            // head.y = Math.max(0, Math.min(head.y, canvas.height - size));
+            head.y = Math.max(0, Math.min(head.y, canvas.height - size));
           }
         });
       }
@@ -347,17 +347,42 @@ function createSimpleFallback() {
   return canvas.toDataURL();
 }
 
+// Calculate velocity scale based on screen size (1920x1080 as baseline)
+function getVelocityScale() {
+  const baseWidth = 1920;
+  const baseHeight = 1080;
+  const currentWidth = window.innerWidth;
+  const currentHeight = window.innerHeight;
+
+  // Use average of width and height scaling factors
+  const widthScale = currentWidth / baseWidth;
+  const heightScale = currentHeight / baseHeight;
+  const scale = (widthScale + heightScale) / 2;
+
+  // Ensure minimum scale of 0.3 and maximum of 3 for reasonable bounds
+  return Math.max(0.3, Math.min(3, scale));
+}
+
 // Utility: create a new bouncing head
 function spawnHead(src, startX, startY) {
   const img = new Image();
   img.src = src;
 
+  const velocityScale = getVelocityScale();
+  const baseVelocity = 2; // Base velocity for 1920x1080
+
   return {
     img,
     x: startX ?? Math.random() * (window.innerWidth - 120),
     y: startY ?? Math.random() * (window.innerHeight - 120),
-    dx: (Math.random() < 0.5 ? -1 : 1) * (1 + Math.random()),
-    dy: (Math.random() < 0.5 ? -1 : 1) * (1 + Math.random()),
+    dx:
+      (Math.random() < 0.5 ? -1 : 1) *
+      (baseVelocity + Math.random()) *
+      velocityScale,
+    dy:
+      (Math.random() < 0.5 ? -1 : 1) *
+      (baseVelocity + Math.random()) *
+      velocityScale,
     size: 120,
     angle: 0,
   };
