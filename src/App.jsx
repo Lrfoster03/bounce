@@ -1,9 +1,11 @@
-import { useState, useRef, useEffect } from "react";
-import * as faceapi from "face-api.js";
 import "./App.css";
 
-const defaultSvg =
-  "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='140' height='140'><circle cx='60' cy='60' r='50' fill='orange' stroke='black' stroke-width='4'/><circle cx='45' cy='50' r='8' fill='black'/><circle cx='75' cy='50' r='8' fill='black'/><path d='M40 80 Q60 100 80 80' stroke='black' stroke-width='4' fill='transparent'/></svg>";
+import * as faceapi from "face-api.js";
+
+import { useEffect, useRef, useState } from "react";
+
+// Use your GitHub avatar instead of the SVG
+const defaultAvatar = "https://avatars.githubusercontent.com/Lrfoster03";
 
 function App() {
   const videoRef = useRef(null);
@@ -11,6 +13,43 @@ function App() {
 
   // Store bouncing heads here
   const headsRef = useRef([]);
+  const [defaultAvatarLoaded, setDefaultAvatarLoaded] = useState(false);
+
+  // Load default avatar image
+  useEffect(() => {
+    const loadDefaultAvatar = async () => {
+      try {
+        const avatarDataUrl = await createCircularAvatar(defaultAvatar);
+        // Create a fallback head with the loaded avatar
+        const fallbackHead = spawnHead(
+          avatarDataUrl,
+          window.innerWidth / 2,
+          window.innerHeight / 2
+        );
+
+        // Wait for the image to actually load
+        fallbackHead.img.onload = () => {
+          setDefaultAvatarLoaded(true);
+        };
+
+        headsRef.current = [fallbackHead];
+      } catch (error) {
+        console.error("Failed to load default avatar:", error);
+        // Create a simple fallback
+        const simpleFallback = createSimpleFallback();
+        headsRef.current = [
+          spawnHead(
+            simpleFallback,
+            window.innerWidth / 2,
+            window.innerHeight / 2
+          ),
+        ];
+        setDefaultAvatarLoaded(true);
+      }
+    };
+
+    loadDefaultAvatar();
+  }, []);
 
   // Load models + camera
   useEffect(() => {
@@ -28,10 +67,7 @@ function App() {
         }
       } catch (err) {
         console.warn("Camera denied or error:", err);
-        // fallback → one bouncing default head
-        headsRef.current = [
-          spawnHead(defaultSvg, window.innerWidth / 2, window.innerHeight / 2),
-        ];
+        // Fallback is already handled in the avatar loading effect
       }
     }
     setup();
@@ -44,19 +80,27 @@ function App() {
     async function detect() {
       if (!videoRef.current || videoRef.current.readyState !== 4) return;
 
-      const detections = await faceapi
-        .detectAllFaces(
-          videoRef.current,
-          new faceapi.TinyFaceDetectorOptions({
-            inputSize: 224,
-            scoreThreshold: 0.3,
-          })
-        )
-        .withFaceLandmarks();
+      try {
+        const detections = await faceapi
+          .detectAllFaces(
+            videoRef.current,
+            new faceapi.TinyFaceDetectorOptions({
+              inputSize: 224,
+              scoreThreshold: 0.3,
+            })
+          )
+          .withFaceLandmarks();
 
-      let newImages;
-      if (detections && detections.length > 0) {
-        newImages = detections.map((detection) => {
+        // Check if detections exist and is an array
+        if (
+          !detections ||
+          !Array.isArray(detections) ||
+          detections.length === 0
+        ) {
+          return; // Keep existing heads, don't update
+        }
+
+        const newImages = detections.map((detection) => {
           const { x, y, width, height } = detection.detection.box;
           const cx = x + width / 2;
           const cy = y + height / 2;
@@ -74,6 +118,7 @@ function App() {
           canvas.height = targetSize;
           const ctx = canvas.getContext("2d");
 
+          // Create circular mask
           ctx.beginPath();
           ctx.ellipse(
             targetSize / 2, // x
@@ -101,34 +146,26 @@ function App() {
 
           return canvas.toDataURL();
         });
-      }
 
-      // only update if new faces found
-      if (newImages && newImages.length > 0) {
+        // Update existing heads or create new ones
         newImages.forEach((src, i) => {
           if (headsRef.current[i]) {
-            headsRef.current[i].img.src = src;
+            // Update existing head image
+            const head = headsRef.current[i];
+            head.img.src = src;
           } else {
+            // Create new head
             headsRef.current[i] = spawnHead(src);
           }
         });
 
-        // If fewer detections than before → trim array
-        headsRef.current = headsRef.current.slice(0, newImages.length);
-      }
-
-      // Update headsRef: keep positions if already exist
-      newImages.forEach((src, i) => {
-        if (headsRef.current[i]) {
-          headsRef.current[i].img.src = src;
-        } else {
-          // Spawn new head if more detected than before
-          headsRef.current[i] = spawnHead(src);
+        // Remove extra heads if fewer faces detected
+        if (newImages.length < headsRef.current.length) {
+          headsRef.current = headsRef.current.slice(0, newImages.length);
         }
-      });
-
-      // If fewer detections than before → trim array
-      headsRef.current = headsRef.current.slice(0, newImages.length);
+      } catch (error) {
+        console.error("Error in face detection:", error);
+      }
     }
 
     interval = setInterval(detect, 500);
@@ -137,43 +174,57 @@ function App() {
 
   // Animation loop
   useEffect(() => {
+    if (!defaultAvatarLoaded) return;
+
     const canvas = canvasRef.current;
     const ctx = canvas.getContext("2d");
 
     function animate() {
-      const ctx = canvas.getContext("2d");
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-      headsRef.current.forEach((head) => {
-        const { x, y, dx, dy, size } = head;
-        const img = head.img;
+      // Safe forEach with proper checks
+      if (headsRef.current && Array.isArray(headsRef.current)) {
+        headsRef.current.forEach((head) => {
+          if (!head || !head.img) return;
 
-        if (img) {
-          // Update rotation angle
-          const speed = Math.sqrt(dx * dx + dy * dy);
-          const direction = dx >= 0 ? 1 : -1; // clockwise if moving right
-          head.angle = (head.angle || 0) + direction * (speed * 0.001);
+          const { x, y, dx, dy, size } = head;
+          const img = head.img;
 
-          // Draw with rotation
-          ctx.save();
-          ctx.translate(x + size / 2, y + size / 2); // move origin to head center
-          ctx.rotate(head.angle);
-          ctx.drawImage(img, -size / 2, -size / 2, size, size);
-          ctx.restore();
-        }
+          // Check if image is loaded properly before drawing
+          if (img.complete && img.naturalWidth > 0) {
+            try {
+              // Update rotation angle
+              const speed = Math.sqrt(dx * dx + dy * dy);
+              const direction = dx >= 0 ? 1 : -1;
+              head.angle = (head.angle || 0) + direction * (speed * 0.001);
 
-        // Update position
-        head.x += head.dx;
-        head.y += head.dy;
+              // Draw with rotation
+              ctx.save();
+              ctx.translate(x + size / 2, y + size / 2);
+              ctx.rotate(head.angle);
+              ctx.drawImage(img, -size / 2, -size / 2, size, size);
+              ctx.restore();
+            } catch (error) {
+              console.error("Error drawing image:", error);
+              return;
+            }
+          }
 
-        // Bounce on edges
-        if (head.x <= 0 || head.x + size >= canvas.width) {
-          head.dx *= -1;
-        }
-        if (head.y <= 0 || head.y + size >= canvas.height) {
-          head.dy *= -1;
-        }
-      });
+          // Update position
+          head.x += head.dx;
+          head.y += head.dy;
+
+          // Bounce on edges
+          if (head.x <= 0 || head.x + size >= canvas.width) {
+            head.dx *= -1;
+            head.x = Math.max(0, Math.min(head.x, canvas.width - size));
+          }
+          if (head.y <= 0 || head.y + size >= canvas.height) {
+            head.dy *= -1;
+            head.y = Math.max(0, Math.min(head.y, canvas.height - size));
+          }
+        });
+      }
 
       // Handle collisions between all pairs
       for (let i = 0; i < headsRef.current.length; i++) {
@@ -181,12 +232,14 @@ function App() {
           const h1 = headsRef.current[i];
           const h2 = headsRef.current[j];
 
+          if (!h1 || !h2) continue;
+
           const dx = h2.x + h2.size / 2 - (h1.x + h1.size / 2);
           const dy = h2.y + h2.size / 2 - (h1.y + h1.size / 2);
           const dist = Math.sqrt(dx * dx + dy * dy);
           const minDist = h1.size / 2 + h2.size / 2;
 
-          if (dist < minDist) {
+          if (dist < minDist && dist > 0) {
             // normalize vector
             const nx = dx / dist;
             const ny = dy / dist;
@@ -197,9 +250,9 @@ function App() {
 
             // impact speed along normal
             const impact = dvx * nx + dvy * ny;
-            if (impact > 0) continue; // already separating
+            if (impact > 0) continue;
 
-            // bounce velocities (equal mass elastic collision)
+            // bounce velocities
             h1.dx -= impact * nx;
             h1.dy -= impact * ny;
             h2.dx += impact * nx;
@@ -219,7 +272,7 @@ function App() {
     }
 
     animate();
-  }, []);
+  }, [defaultAvatarLoaded]);
 
   return (
     <>
@@ -240,17 +293,98 @@ function App() {
   );
 }
 
+// Create circular avatar from URL
+async function createCircularAvatar(imageUrl) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+
+    img.onload = () => {
+      const canvas = document.createElement("canvas");
+      canvas.width = 200;
+      canvas.height = 200;
+      const ctx = canvas.getContext("2d");
+
+      // Create circular clip
+      ctx.beginPath();
+      ctx.arc(100, 100, 100, 0, Math.PI * 2);
+      ctx.clip();
+
+      // Draw image
+      ctx.drawImage(img, 0, 0, 200, 200);
+
+      resolve(canvas.toDataURL());
+    };
+
+    img.onerror = () => {
+      reject(new Error(`Failed to load image: ${imageUrl}`));
+    };
+
+    img.src = imageUrl;
+  });
+}
+
+// Create simple fallback avatar
+function createSimpleFallback() {
+  const canvas = document.createElement("canvas");
+  canvas.width = 200;
+  canvas.height = 200;
+  const ctx = canvas.getContext("2d");
+
+  // Blue circle background
+  ctx.fillStyle = "#4A90E2";
+  ctx.beginPath();
+  ctx.arc(100, 100, 100, 0, Math.PI * 2);
+  ctx.fill();
+
+  // White initials
+  ctx.fillStyle = "white";
+  ctx.font = "bold 60px Arial";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText("LF", 100, 100);
+
+  return canvas.toDataURL();
+}
+
+// Calculate velocity scale based on screen size (1920x1080 as baseline)
+function getVelocityScale() {
+  const baseWidth = 1920;
+  const baseHeight = 1080;
+  const currentWidth = window.innerWidth;
+  const currentHeight = window.innerHeight;
+
+  // Use average of width and height scaling factors
+  const widthScale = currentWidth / baseWidth;
+  const heightScale = currentHeight / baseHeight;
+  const scale = (widthScale + heightScale) / 2;
+
+  // Ensure minimum scale of 0.3 and maximum of 3 for reasonable bounds
+  return Math.max(0.3, Math.min(3, scale));
+}
+
 // Utility: create a new bouncing head
 function spawnHead(src, startX, startY) {
   const img = new Image();
   img.src = src;
+
+  const velocityScale = getVelocityScale();
+  const baseVelocity = 2; // Base velocity for 1920x1080
+
   return {
     img,
     x: startX ?? Math.random() * (window.innerWidth - 120),
     y: startY ?? Math.random() * (window.innerHeight - 120),
-    dx: (Math.random() < 0.5 ? -1 : 1) * (1 + Math.random()),
-    dy: (Math.random() < 0.5 ? -1 : 1) * (1 + Math.random()),
+    dx:
+      (Math.random() < 0.5 ? -1 : 1) *
+      (baseVelocity + Math.random()) *
+      velocityScale,
+    dy:
+      (Math.random() < 0.5 ? -1 : 1) *
+      (baseVelocity + Math.random()) *
+      velocityScale,
     size: 120,
+    angle: 0,
   };
 }
 
